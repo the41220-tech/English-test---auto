@@ -1,274 +1,92 @@
-# 📚 영단어 테스트 자동화 시스템
-## Mac 설치 및 실행 가이드
+# English vocabulary test automation
 
----
+This Python workflow turns an English/Korean vocabulary file into a daily practice sheet and publishes it as a Notion child page. It automates the repeated task of selecting words, formatting recall questions and assembling an answer key. The repository demonstrates that pipeline; it does not establish improved learning outcomes, time savings or adoption by learners.
 
-## 📦 Step 1: 프로젝트 설정
+## What actually runs
 
-### 1-1. 프로젝트 폴더 만들기
+1. Optional one-time preparation: [setup_vocabulary.py](setup_vocabulary.py) reads `words_cleaned.txt`, asks Anthropic Claude for Korean meanings in batches of 100, and writes `vocabulary_complete.txt` as `word|meaning` lines. A prepared vocabulary is already tracked, so this paid step is not required to try the daily path.
+2. [daily_test.py](daily_test.py) filters nonempty vocabulary lines containing `|` and uses `random.sample` to choose up to 20 lines without replacement within that run. It splits each line at the first separator.
+3. Claude receives those words and a Korean prompt requesting 20 recall questions (10 in each translation direction), 3–5 four-option questions, answers and a review list.
+4. The returned text is split on line boundaries into nominally 1,800-character chunks and sent to Notion as paragraph blocks in a new child page titled with the local date. Markdown is text inside paragraphs, not converted into native Notion headings or lists.
+5. If the Notion upload raises an exception, the generated text is saved to `test_YYYYMMDD.md`. A Claude generation failure occurs before this upload fallback and is not caught there. Repeated successful runs create separate pages; there is no deduplication.
+
+Both Python scripts request `claude-sonnet-4-5-20250929`. The daily script reads `CLAUDE_API_KEY`, `NOTION_TOKEN` and `NOTION_PAGE_ID` through `python-dotenv`/environment variables, then prompts for missing values. The preparation script instead prompts directly for its Claude key; it does not load the daily configuration.
+
+## Choice and tradeoffs
+
+Random sampling is a small, stateless selection mechanism, not spaced repetition. It stores no answers, mastery score, last-seen date or due schedule. Words can recur across days, duplicate source lines can produce duplicate words, and a vocabulary with fewer than 20 eligible lines yields fewer words even though the prompt still requests 20 questions. These are consequences of the implementation, not evidence of the owner's reasons for choosing it.
+
+Claude supplies translations and question wording without a deterministic validator; Notion supplies a reading destination without a scoring loop. This keeps the workflow compact but leaves correctness and review to a person. Review vocabulary meanings, coverage, ambiguous prompts, distractors and answer keys before studying or sharing a generated sheet. The current program uploads before human review; it has no approval gate.
+
+## Evidence, handled failure and remaining limits
+
+The tracked [sample test dated 2025-11-01](test_20251101.md) contains recall questions, five multiple-choice questions, answers and a vocabulary review list. It is an inspectable output artifact, not a token-usage record, a verified successful Notion upload or an independently graded quality evaluation. No live run was made for this documentation revision.
+
+The code explicitly addresses Notion's text-size boundary by splitting long output into paragraphs, and preserves text locally when upload fails. This documents a failure-handling mechanism, not a proven incident chronology. One unresolved edge case is concrete: a single line longer than the target is not subdivided and can still exceed the intended size limit. Large outputs also lack request batching or retry logic.
+
+The preparation script preserves failed batches as `[뜻 추가 필요]` (“meaning needed”) entries; it does not verify that successful responses contain exactly one correct translation for every input word. The daily selector does not exclude those placeholders. Human review is therefore needed even before question generation. The old setup instructions named `clean_words.py`, `combined.txt` and `.env.example`, but these files are not tracked here; the instructions below use the available entrypoints instead.
+
+## Setup on macOS / a Python terminal
+
+Use a supported Python version compatible with the dependencies in [requirements.txt](requirements.txt); those dependencies have lower bounds rather than a lockfile. Place the checkout at `~/vocab-test` if you want to use the existing shell wrapper unchanged. Otherwise run directly from your checkout root.
+
 ```bash
-# 터미널 열기 (Command + Space → "터미널" 입력)
-
-# 프로젝트 폴더 생성
-mkdir ~/vocab-test
-cd ~/vocab-test
-```
-
-### 1-2. 파일 복사하기
-다운로드한 모든 파일을 `~/vocab-test` 폴더에 복사:
-- `combined.txt` (원본 단어 파일)
-- `clean_words.py`
-- `setup_vocabulary.py`
-- `daily_test.py`
-- `requirements.txt`
-- `.env.example`
-
----
-
-## 🔧 Step 2: Python 환경 설정
-
-### 2-1. Python 버전 확인
-```bash
-python3 --version
-# Python 3.8 이상이어야 합니다
-```
-
-### 2-2. 가상환경 생성
-```bash
-cd ~/vocab-test
+cd /path/to/English-test---auto
 python3 -m venv venv
 source venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 
-### 2-3. 라이브러리 설치
+For authorized live use, create your own local `.env` file (no template file is supplied) with these names and replace the placeholders locally:
+
+```dotenv
+CLAUDE_API_KEY=<your-anthropic-api-key>
+NOTION_TOKEN=<your-notion-integration-token>
+NOTION_PAGE_ID=<your-authorized-parent-page-id>
+```
+
+Obtain a Claude key from the [Anthropic console](https://console.anthropic.com/) and a Notion integration from [Notion integrations](https://www.notion.so/my-integrations). Connect that integration to the intended parent page and give it the necessary permission to create content. Never commit credentials, page identifiers or private generated content. Missing-value prompts use ordinary `input`, so unattended runs need configuration and interactive key entry may be visible on screen.
+
+### One-time preparation (optional; paid API calls and local overwrite)
+
+Review the supplied vocabulary first. If you deliberately want to regenerate meanings, `python3 setup_vocabulary.py` reads `words_cleaned.txt`, asks for the Claude key, calls the provider, and overwrites `vocabulary_complete.txt`. Back up your own curated vocabulary before doing this. There is no tracked cleaning script to run beforehand.
+
+### Daily run (paid API call and external write)
+
 ```bash
-pip install -r requirements.txt
-```
-
----
-
-## 🔑 Step 3: API 키 설정
-
-### 3-1. Claude API 키 발급
-1. https://console.anthropic.com/ 접속
-2. 로그인
-3. **Settings → API Keys**
-4. **Create Key** 클릭
-5. 키 복사
-
-### 3-2. Notion Integration 만들기
-1. https://www.notion.so/my-integrations 접속
-2. **+ New integration** 클릭
-3. 이름 입력 (예: "Vocab Test")
-4. **Submit** 클릭
-5. **Internal Integration Token** 복사
-
-### 3-3. Notion 페이지 설정
-1. 노션에서 새 페이지 만들기 (예: "영단어 테스트")
-2. 페이지 우측 상단 **⋯ → Connections → Connect to [만든 Integration]**
-3. 페이지 URL에서 Page ID 복사
-   ```
-   https://notion.so/My-Page-abc123def456?v=...
-                          ↑ 이 부분이 Page ID
-   ```
-
-### 3-4. .env 파일 만들기
-```bash
-cd ~/vocab-test
-cp .env.example .env
-nano .env  # 또는 텍스트 에디터로 열기
-```
-
-`.env` 파일 내용을 실제 값으로 수정:
-```
-CLAUDE_API_KEY=sk-ant-api03-실제키입력
-NOTION_TOKEN=secret_실제토큰입력
-NOTION_PAGE_ID=abc123def456
-```
-
-저장하고 닫기 (nano: Ctrl+O → Enter → Ctrl+X)
-
----
-
-## ▶️ Step 4: 실행하기
-
-### 4-1. 단어 정리 (1회만)
-```bash
-cd ~/vocab-test
-source venv/bin/activate
-python3 clean_words.py
-```
-
-출력:
-```
-✅ 총 1753개 단어 발견
-💾 저장 완료: words_cleaned.txt
-```
-
-### 4-2. 한국어 뜻 추가 (1회만)
-```bash
-python3 setup_vocabulary.py
-```
-
-- API 키 입력 요청되면 입력
-- 약 5-10분 소요
-- 비용: 약 $0.30-0.50
-
-출력:
-```
-✅ 완료! 1753개 단어 처리됨
-📁 최종 파일: vocabulary_complete.txt
-```
-
-### 4-3. 테스트 생성 (매일)
-```bash
+# Run from the checkout root with the virtual environment active.
 python3 daily_test.py
 ```
 
-출력:
+This calls Claude and creates a Notion page; it is not an offline smoke test. Selected words and a resulting page URL may appear in terminal output. Keep any logs private.
+
+### Optional scheduling
+
+[run_daily_test.sh](run_daily_test.sh) changes directory to `~/vocab-test`, activates `venv/bin/activate`, then runs `python3 daily_test.py`. It only works unchanged if that directory and virtual environment exist. After a deliberate manual live check, it can be invoked with `bash ~/vocab-test/run_daily_test.sh`; an optional cron entry for 09:00 in the host's timezone is:
+
+```cron
+0 9 * * * /bin/bash "$HOME/vocab-test/run_daily_test.sh"
 ```
-✅ 20개 단어 선택 완료
-✅ 테스트 생성 완료
-✅ 업로드 완료!
-🔗 링크: https://notion.so/...
-```
 
----
+Scheduling does not guarantee execution while a Mac is asleep or offline. Configure all three variables beforehand so the scheduled process does not wait for interactive input. Any output capture should be private and outside version control.
 
-## ⏰ Step 5: 자동 실행 설정
+## Offline verification and troubleshooting
 
-### 5-1. 실행 스크립트 만들기
+This check compiles source in memory without importing providers, loading local configuration, writing bytecode or making requests:
+
 ```bash
-cd ~/vocab-test
-nano run_daily_test.sh
+python3 -B -c 'from pathlib import Path; files=("daily_test.py", "setup_vocabulary.py"); [compile(Path(f).read_text(encoding="utf-8"), f, "exec") for f in files]; print("Syntax OK")'
+bash -n run_daily_test.sh
 ```
 
-다음 내용 입력:
-```bash
-#!/bin/bash
-cd ~/vocab-test
-source venv/bin/activate
-python3 daily_test.py
-```
+Offline checks for this revision also exercised only the selector and chunker function definitions with a synthetic vocabulary and the tracked sample. They do not verify provider authentication, model availability, Notion permissions or live rendering. There is no tracked automated test suite.
 
-저장 후 실행 권한 부여:
-```bash
-chmod +x run_daily_test.sh
-```
+For missing packages, activate the intended virtual environment and install the manifest. For wrapper failures, check the hard-coded directory and virtual environment path. For Notion errors, check the integration connection, parent page ID, permissions and block sizes; look for the local fallback file. For Claude errors, check the key, model availability, provider limits and [billing configuration](https://console.anthropic.com/settings/billing). Do not share tokens or private logs when requesting help.
 
-### 5-2. Cron Job 설정 (매일 오전 9시)
-```bash
-crontab -e
-```
+## Cost boundary
 
-다음 라인 추가:
-```
-0 9 * * * ~/vocab-test/run_daily_test.sh >> ~/vocab-test/log.txt 2>&1
-```
+No measured dollar estimate is provided. Preparation makes one request per batch of up to 100 input words with `max_tokens=4000`; a daily generation uses `max_tokens=8000`. These are output-token ceilings per request, not expected token counts or spending caps. Actual charges depend on input/output usage, current model pricing, frequency and repeated runs. The scripts do not record usage, enforce a budget or implement a local retry policy; provider SDK behavior may add retries. Check current pricing and account-level limits before live use, then record usage from an authorized run before estimating daily or monthly cost.
 
-저장하고 닫기 (vim: :wq)
+## Proposed next evaluation
 
-### 5-3. Cron 확인
-```bash
-crontab -l
-```
-
----
-
-## 🧪 테스트 실행
-
-수동으로 한번 실행해보기:
-```bash
-cd ~/vocab-test
-./run_daily_test.sh
-```
-
-로그 확인:
-```bash
-cat ~/vocab-test/log.txt
-```
-
----
-
-## 🎯 시간대별 실행 설정
-
-### 매일 오전 8시
-```
-0 8 * * * ~/vocab-test/run_daily_test.sh >> ~/vocab-test/log.txt 2>&1
-```
-
-### 매일 오후 7시
-```
-0 19 * * * ~/vocab-test/run_daily_test.sh >> ~/vocab-test/log.txt 2>&1
-```
-
-### 평일만 오전 9시
-```
-0 9 * * 1-5 ~/vocab-test/run_daily_test.sh >> ~/vocab-test/log.txt 2>&1
-```
-
----
-
-## ❓ 문제 해결
-
-### 오류 1: "venv not found"
-```bash
-cd ~/vocab-test
-python3 -m venv venv
-```
-
-### 오류 2: "Module not found"
-```bash
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 오류 3: "Notion API error"
-- 노션 페이지에 Integration이 연결되어 있는지 확인
-- Page ID가 정확한지 확인
-
-### 오류 4: "Claude API error"
-- API 키가 정확한지 확인
-- 결제 정보가 등록되어 있는지 확인
-- https://console.anthropic.com/settings/billing
-
----
-
-## 💰 예상 비용
-
-### 초기 설정 (1회)
-- 1,753개 단어 뜻 추가: **약 $0.30-0.50**
-
-### 매일 운영
-- 20개 단어 테스트 생성: **약 $0.003/일**
-- 월 비용: **약 $0.10** (30일 기준)
-
----
-
-## 📊 파일 구조
-
-```
-~/vocab-test/
-├── combined.txt              # 원본 단어 파일
-├── words_cleaned.txt         # 정리된 단어 (Step 4-1 후)
-├── vocabulary_complete.txt   # 뜻 추가된 최종 파일 (Step 4-2 후)
-├── clean_words.py           # 단어 정리 스크립트
-├── setup_vocabulary.py      # 뜻 추가 스크립트
-├── daily_test.py           # 테스트 생성 스크립트
-├── run_daily_test.sh       # 자동 실행 스크립트
-├── requirements.txt        # Python 라이브러리
-├── .env                    # API 키 (직접 만들기)
-├── venv/                   # Python 가상환경
-└── log.txt                # 실행 로그
-```
-
----
-
-## ✨ 완료!
-
-이제 매일 자동으로:
-1. 20개 랜덤 단어 선택
-2. Claude가 테스트 생성
-3. 노션에 자동 업로드
-
-노션에서 테스트 확인하고 공부하세요! 🎉
+Before adding a review schedule or claiming educational benefit, evaluate a fixed, human-reviewed vocabulary sample: retain the selected words and generated sheets, grade translation accuracy, coverage, answer-key agreement and distractor ambiguity, and report rejection/edit rates. Test malformed vocabulary, missing meanings, fewer-than-20 inputs, oversized single lines and simulated provider/upload failures offline. Define criteria before evaluating outputs. Any subsequent comparison of random sampling with spaced repetition needs an explicit learner-consent and outcome-measurement protocol; it is not an implemented feature here.
